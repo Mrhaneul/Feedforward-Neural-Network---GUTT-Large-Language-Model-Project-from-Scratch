@@ -1,69 +1,76 @@
-import numpy as np
-from typing import Iterable, Tuple, List
+from typing import List, Callable, Union
+from lib.tinygradish import Tensor as tsr
+from nn_from_scratch.layers import Linear, relu, gelu
 
-from .layers import Layer
-
+# LayerLike: Define a type alias for layers
+LayerLike = Union[Callable,[[tsr], tsr], Linear]
 
 class Sequential:
-    def __init__(self, layers: List[Layer]):
+    """
+    Simple container that applies a list of layers/functions in order.
+    Example usage:
+        model = Sequential([Linear(2, 4), relu, Linear(4, 1)])
+        y = model(x)
+    """
+    
+    # Initialize with a list of layers
+    def __init__(self, layers: List[LayerLike]):
         self.layers = layers
-        self._training = True
 
-    # modes
-    def train(self):
-        self._training = True
-        for l in self.layers:
-            l.train()
+    # Make the model callable
+    def __call__(self, x: tsr) -> tsr:
+        return self.forward(x)
 
-    def eval(self):
-        self._training = False
-        for l in self.layers:
-            l.eval()
-
-    def forward(self, x: np.ndarray, training: bool = True) -> np.ndarray:
-        # Prefer explicit training flag, else internal mode
-        train_flag = training if training is not None else self._training
+    # Define forward method
+    def forward(self, x: tsr) -> tsr:
         for layer in self.layers:
-            x = layer.forward(x, training=train_flag)
+            x = layer(x)    # For both Linear layers and activation functions
         return x
 
-    def backward(self, grad: np.ndarray) -> np.ndarray:
-        for layer in reversed(self.layers):
-            grad = layer.backward(grad)
-        return grad
-
-    def params_and_grads(self) -> Iterable[Tuple[np.ndarray, np.ndarray]]:
+    def parameters(self) -> List[tsr]:
+        """
+        Collect parameters (weights/biases) from all sub-layers that have .parameters
+        Activation functions (relu/gelu) have no parameters, so they’re skipped.
+        """
+        params = []
         for layer in self.layers:
-            for p, g in layer.params_and_grads():
-                yield p, g
-
-    # persistence
-    def state_dict(self) -> dict:
-        state = {}
-        for i, l in enumerate(self.layers):
-            for j, (p, _) in enumerate(l.params_and_grads()):
-                state[f"layer{i}.param{j}"] = p
-        return state
-
-    def load_state_dict(self, state: dict):
-        for i, l in enumerate(self.layers):
-            for j, (p, _) in enumerate(l.params_and_grads()):
-                key = f"layer{i}.param{j}"
-                if key not in state:
-                    raise KeyError(f"Missing key in state: {key}")
-                src = state[key]
-                if src.shape != p.shape:
-                    raise ValueError(f"Shape mismatch for {key}: {src.shape} vs {p.shape}")
-                p[...] = src
-
-    def save(self, path: str):
-        state = self.state_dict()
-        np.savez(path, **state)
-
-    @classmethod
-    def load(cls, path: str, template_model: "Sequential") -> "Sequential":
-        data = np.load(path)
-        state = {k: data[k] for k in data.files}
-        template_model.load_state_dict(state)
-        return template_model
-
+            if hasattr(layer, 'parameters'):
+                # Linear.parameters is a @property returning a list [W, b]
+                params.extend(layer.parameters)
+        return params
+    
+class FeedForward:
+    """
+    A standard 2-layer feed-forward network:
+        x -> Linear(d_in, d_hidden) -> act -> Linear(d_hidden, d_out)
+    """
+    
+    # Initialize with input, hidden, output dimensions and activation function
+    # Default activation is GELU
+    def __init__(self, d_in: int, d_hidden: int, d_out: int, activation: Callable = gelu):
+        if activation == "gelu":
+            activation = gelu
+        elif activation == "relu":
+            activation = relu
+        else:
+            raise ValueError(f"Unsupported activation: {activation}")
+        
+        # Create the sequential model
+        self.net = Sequential([
+            # x -> Linear(d_in, d_hidden) -> act -> Linear(d_hidden, d_out)
+            Linear(d_in, d_hidden),
+            activation,
+            Linear(d_hidden, d_out)
+        ])
+    
+    # Make the model callable
+    def __call__(self, x: tsr) -> tsr:
+        return self.forward(x)
+    
+    # Define forward method
+    def forward(self, x: tsr) -> tsr:
+        return self.net(x)
+    
+    # Get all parameters of the network
+    def parameters(self) -> List[tsr]:
+        return self.net.parameters()
