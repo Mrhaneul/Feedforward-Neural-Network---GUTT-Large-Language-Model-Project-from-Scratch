@@ -23,7 +23,7 @@ model = FeedForward(
     d_hidden=32, 
     d_out=1, 
     activation="relu",
-    # options: "relu", "gelu", "sigmoid"
+    # options: "relu", "gelu"
     )
 optimizer = SGD(model.parameters(), lr=0.1)
 
